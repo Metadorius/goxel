@@ -20,6 +20,11 @@
 
 #define READ(type, file) \
     ({ type v; size_t r = fread(&v, sizeof(v), 1, file); (void)r; v;})
+#define WRITE(type, v, file) \
+    ({ type v_ = v; fwrite(&v_, sizeof(v_), 1, file);})
+
+
+//TODO: decrease amount of structs and don't save junk values
 typedef struct {
         char fileType[16];
         uint32_t unknown;
@@ -69,6 +74,7 @@ typedef struct {
     sectionData_t data;
 } voxelSection_t;
 
+//TODO: cleanup if possible
 static void vxl_import(const char *path) {
     path = path ?: noc_file_dialog_open(NOC_FILE_DIALOG_OPEN, "vxl\0*.vxl\0",
                                         NULL, NULL);
@@ -76,9 +82,8 @@ static void vxl_import(const char *path) {
     header_t header;
     FILE *file;
     file = fopen(path, "rb");
-    for(int i = 0; i<16 ; i++) {
+    for(int i = 0; i<16 ; i++)
         header.fileType[i] = READ(char, file);
-    }
 
     if(strncmp(header.fileType, "Voxel Animation", 5))
         return;
@@ -99,9 +104,8 @@ static void vxl_import(const char *path) {
     voxelSection_t sections[header.numSections];
     for(int i = 0 ; i < header.numSections ; i++ ) {
         sectionHeader_t header;
-        for(int i = 0; i<16 ; i++) {
+        for(int i = 0; i<16 ; i++)
             header.name[i] = READ(char, file);
-        }
         header.number = READ(uint32_t, file);
         header.unknown = READ(uint32_t, file);
         header.unknown2 = READ(uint32_t, file);
@@ -139,13 +143,14 @@ static void vxl_import(const char *path) {
     int pos[3];     
     uint8_t colour[4];       
     colour[3] = 255;
-	for (int i = 0; i < header.numSections; i++) {
+    //TODO: put each section in own layer
+    for (int i = 0; i < header.numSections; i++) {
         sectionData_t data;
-		fseek(file, 802 + 28 * header.numSections + sections[i].tailer.spanStartOffset, 0);
+        fseek(file, 802 + 28 * header.numSections + sections[i].tailer.spanStartOffset, 0);
         long n = sections[i].tailer.xSize * sections[i].tailer.ySize;
-        LOG_D("%d ", n);
-		data.spanStart = (int32_t*) malloc (n*sizeof(int32_t));
-		data.spanEnd = (int32_t*) malloc (n*sizeof(int32_t));
+
+        data.spanStart = (int32_t*) malloc (n*sizeof(int32_t));
+        data.spanEnd = (int32_t*) malloc (n*sizeof(int32_t));
 
         for (int di = 0 ; di < n ; di++)
             data.spanStart[di] = READ(int32_t, file);
@@ -155,23 +160,23 @@ static void vxl_import(const char *path) {
 
         long dataStart = ftell(file);
 
-		for (int di = 0; di < n; di++)
-		{
-			if (data.spanStart[di] == -1)
-				continue;
+        for (int di = 0; di < n; di++)
+        {
+            if (data.spanStart[di] == -1)
+                continue;
             
-			fseek(file, dataStart + data.spanStart[di], 0);
-			int x = (short)(di % sections[i].tailer.xSize);
-			int y = (short)(di / sections[i].tailer.xSize);
-			int z = 0;
-			do
-			{
-				z += READ(uint8_t, file);
-				uint8_t count = READ(uint8_t, file);
-				for (int j = 0; j < count; j++)
-				{
-					uint8_t vColour = READ(uint8_t, file);
-                    //TODO: do something with this					
+            fseek(file, dataStart + data.spanStart[di], 0);
+            int x = (short)(di % sections[i].tailer.xSize);
+            int y = (short)(di / sections[i].tailer.xSize);
+            int z = 0;
+            do
+            {
+                z += READ(uint8_t, file);
+                uint8_t count = READ(uint8_t, file);
+                for (int j = 0; j < count; j++)
+                {
+                    uint8_t vColour = READ(uint8_t, file);
+                    //TODO: do something with this		
                     //uint8_t vNormal = READ(uint8_t, file);
                     //dump normals for now
                     READ(uint8_t, file);
@@ -182,22 +187,24 @@ static void vxl_import(const char *path) {
                     colour[0] = pal[0];
                     colour[1] = pal[1];
                     colour[2] = pal[2];
-    				z++;
+                    z++;
                     mesh_set_at(goxel.image->active_layer->mesh, &iter, pos, colour);
-				}
+                }
 
-				READ(uint8_t, file);
-			} while (z < sections[i].tailer.zSize);
+                READ(uint8_t, file);
+            } while (z < sections[i].tailer.zSize);
         }
-		free(data.spanStart);
+        free(data.spanStart);
         free(data.spanEnd);
-    }
-    
+    }   
 }
 
 static void export_as_vxl(const char *path) {
-    
-    
+    path = path ?: noc_file_dialog_open(NOC_FILE_DIALOG_SAVE,
+                    "Westwood vxl\0*.vxl\0", NULL, "untitled.vxl");
+    if (!path) return;
+    LOG_I("NYI");
+    //TODO: Write me
 }
 
 ACTION_REGISTER(import_vxl,
