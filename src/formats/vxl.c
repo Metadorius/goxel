@@ -16,262 +16,191 @@
  * goxel.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-// Support for Ace of Spades map files (vxl)
-
 #include "goxel.h"
 
 #define READ(type, file) \
     ({ type v; size_t r = fread(&v, sizeof(v), 1, file); (void)r; v;})
+typedef struct {
+        char fileType[16];
+        uint32_t unknown;
+        uint32_t numSections;
+        uint32_t numSections2;
+        uint32_t bodySize;
+        uint8_t startPaletteRemap;
+        uint8_t endPaletteRemap;
+        uint8_t palette[256][3]; 
+} header_t;
 
-#define raise(msg) do { \
-        LOG_E(msg); \
-        ret = -1; \
-        goto end; \
-    } while (0)
+typedef struct {
+        char name[16];
+        uint32_t number;
+        uint32_t unknown;
+        uint32_t unknown2;
+} sectionHeader_t;
 
-static inline int AT(int x, int y, int z) {
-    x = 511 - x;
-    z = 63 - z;
-    return x + y * 512 + z * 512 * 512;
-}
+typedef struct {
+        uint8_t skip;
+        uint8_t numVoxels; 
+} voxelSpanSegment_t;
 
-static void swap_color(uint32_t v, uint8_t ret[4])
-{
-    uint8_t o[4];
-    memcpy(o, &v, 4);
-    ret[0] = o[2];
-    ret[1] = o[1];
-    ret[2] = o[0];
-    ret[3] = o[3];
-}
+typedef struct {
+        // NOTE: n = SectionTailer.xSize * SectionTailer.ySize
 
-static int vxl_import(const char *path)
-{
-    // The algo is based on
-    // https://silverspaceship.com/aosmap/aos_file_format.html
-    // From Sean Barrett (the same person that wrote the code used in
-    // ext_src/stb!).
-    int ret = 0, size;
-    int w = 512, h = 512, d = 64, x, y, z;
-    uint8_t (*cube)[4] = NULL;
-    uint8_t *data, *v;
+        // Offset into spanData to the start of each span
+        // NOTE: if == -1 then the span is empty (and has no span data)
+        int32_t *spanStart;
+        int32_t *spanEnd; 
+        voxelSpanSegment_t sections[];
+} sectionData_t;
 
-    uint32_t *color;
-    int i;
-    int number_4byte_chunks;
-    int top_color_start;
-    int top_color_end;
-    int bottom_color_start;
-    int bottom_color_end; // exclusive
-    int len_top;
-    int len_bottom;
+typedef struct {
+        uint32_t spanStartOffset;
+        uint32_t spanEndOffset;
+        uint32_t spanDataOffset;
+        float scale;
+        float transform[3][4];
+        float minBounds[3];
+        float maxBounds[3]; 
+        uint8_t xSize;
+        uint8_t ySize;
+        uint8_t zSize;
+        uint8_t normalType;
+} sectionTailer_t;
 
-    path = path ?: noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
-                                        "vxl\0*.vxl\0", NULL, NULL);
-    if (!path) return -1;
+typedef struct {
+    sectionHeader_t header;
+    sectionTailer_t tailer;
+    sectionData_t data;
+} voxelSection_t;
 
-    cube = calloc(w * h * d, sizeof(*cube));
-    data = (void*)read_file(path, &size);
-    v = data;
-
-    for (y = 0; y < h; y++)
-    for (x = 0; x < w; x++) {
-
-        for (z = 0; z < 64; z++)
-            cube[AT(x, y, z)][3] = 255;
-
-        z = 0;
-        while (true) {
-            number_4byte_chunks = v[0];
-            top_color_start = v[1];
-            top_color_end = v[2];
-
-            for (i = z; i < top_color_start; i++)
-                cube[AT(x, y, i)][3] = 0;
-
-            color = (uint32_t*)(v + 4);
-            for (z = top_color_start; z <= top_color_end; z++) {
-                CHECK(z >= 0 && z < d);
-                swap_color(*color++, cube[AT(x, y, z)]);
-            }
-
-            len_bottom = top_color_end - top_color_start + 1;
-
-            // check for end of data marker
-            if (number_4byte_chunks == 0) {
-                // infer ACTUAL number of 4-byte chunks from the length of the
-                // color data
-                v += 4 * (len_bottom + 1);
-                break;
-            }
-
-            // infer the number of bottom colors in next span from chunk length
-            len_top = (number_4byte_chunks-1) - len_bottom;
-
-            // now skip the v pointer past the data to the beginning of the
-            // next span
-            v += v[0] * 4;
-
-            bottom_color_end   = v[3]; // aka air start
-            bottom_color_start = bottom_color_end - len_top;
-
-            for(z = bottom_color_start; z < bottom_color_end; z++)
-                swap_color(*color++, cube[AT(x, y, z)]);
-        }
-    }
-
-    mesh_blit(goxel.image->active_layer->mesh, (uint8_t*)cube,
-              -w / 2, -h / 2, -d / 2, w, h, d, NULL);
-    goxel_update_meshes(-1);
-    if (box_is_null(goxel.image->box)) {
-        bbox_from_extents(goxel.image->box, vec3_zero, w / 2, h / 2, d / 2);
-    }
-    free(cube);
-    free(data);
-    return ret;
-}
-
-static int is_surface(int x, int y, int z, uint8_t map[512][512][64])
-{
-   if (map[x][y][z]==0) return 0;
-   if (x   >   0 && map[x-1][y][z]==0) return 1;
-   if (x+1 < 512 && map[x+1][y][z]==0) return 1;
-   if (y   >   0 && map[x][y-1][z]==0) return 1;
-   if (y+1 < 512 && map[x][y+1][z]==0) return 1;
-   if (z   >   0 && map[x][y][z-1]==0) return 1;
-   if (z+1 <  64 && map[x][y][z+1]==0) return 1;
-   return 0;
-}
-
-static void write_color(FILE *f, uint32_t color)
-{
-    uint8_t c[4];
-    memcpy(c, &color, 4);
-    fputc(c[2], f);
-    fputc(c[1], f);
-    fputc(c[0], f);
-    fputc(c[3], f);
-}
-
-#define MAP_Z  64
-void write_map(const char *filename,
-               uint8_t map[512][512][64],
-               uint32_t color[512][512][64])
-{
-    int i,j,k;
-    FILE *f = fopen(filename, "wb");
-
-    for (j = 0; j < 512; ++j) {
-        for (i=0; i < 512; ++i) {
-            k = 0;
-            while (k < MAP_Z) {
-                int z;
-                int air_start;
-                int top_colors_start;
-                int top_colors_end; // exclusive
-                int bottom_colors_start;
-                int bottom_colors_end; // exclusive
-                int top_colors_len;
-                int bottom_colors_len;
-                int colors;
-
-                // find the air region
-                air_start = k;
-                while (k < MAP_Z && !map[i][j][k])
-                    ++k;
-
-                // find the top region
-                top_colors_start = k;
-                while (k < MAP_Z && is_surface(i,j,k,map))
-                    ++k;
-                top_colors_end = k;
-
-                // now skip past the solid voxels
-                while (k < MAP_Z && map[i][j][k] && !is_surface(i,j,k,map))
-                    ++k;
-
-                // at the end of the solid voxels, we have colored voxels.
-                // in the "normal" case they're bottom colors; but it's
-                // possible to have air-color-solid-color-solid-color-air,
-                // which we encode as air-color-solid-0, 0-color-solid-air
-
-                // so figure out if we have any bottom colors at this point
-                bottom_colors_start = k;
-
-                z = k;
-                while (z < MAP_Z && is_surface(i,j,z,map))
-                    ++z;
-
-                if (z == MAP_Z || 0)
-                    ; // in this case, the bottom colors of this span are
-                      // empty, because we'l emit as top colors
-                else {
-                    // otherwise, these are real bottom colors so we can write
-                    // them
-                    while (is_surface(i,j,k,map))
-                        ++k;
-                }
-                bottom_colors_end = k;
-
-                // now we're ready to write a span
-                top_colors_len    = top_colors_end    - top_colors_start;
-                bottom_colors_len = bottom_colors_end - bottom_colors_start;
-
-                colors = top_colors_len + bottom_colors_len;
-
-                if (k == MAP_Z)
-                    fputc(0,f); // last span
-                else
-                    fputc(colors+1, f);
-
-                fputc(top_colors_start, f);
-                fputc(top_colors_end-1, f);
-                fputc(air_start, f);
-
-                for (z=0; z < top_colors_len; ++z)
-                    write_color(f, color[i][j][top_colors_start + z]);
-                for (z=0; z < bottom_colors_len; ++z)
-                    write_color(f, color[i][j][bottom_colors_start + z]);
-            }
-        }
-    }
-    fclose(f);
-}
-
-static void export_as_vxl(const char *path)
-{
-    uint8_t (*map)[512][512][64];
-    uint32_t (*color)[512][512][64];
-    const mesh_t *mesh = goxel.layers_mesh;
-    mesh_iterator_t iter = {0};
-    uint8_t c[4];
-    int x, y, z, pos[3];
-
-    map = calloc(1, sizeof(*map));
-    color = calloc(1, sizeof(*color));
-
-    path = path ?: noc_file_dialog_open(NOC_FILE_DIALOG_SAVE,
-                    "vxl\0*.vxl\0", NULL, "untitled.vxl");
+static void vxl_import(const char *path) {
+    path = path ?: noc_file_dialog_open(NOC_FILE_DIALOG_OPEN, "vxl\0*.vxl\0",
+                                        NULL, NULL);
     if (!path) return;
-
-    for (z = 0; z < 64; z++)
-    for (y = 0; y < 512; y++)
-    for (x = 0; x < 512; x++) {
-        pos[0] = 256 - x;
-        pos[1] = y - 256;
-        pos[2] = 31 - z;
-        mesh_get_at(mesh, &iter, pos, c);
-        if (c[3] <= 127) continue;
-        (*map)[x][y][z] = 1;
-        memcpy(&((*color)[x][y][z]), c, 4);
+    header_t header;
+    FILE *file;
+    file = fopen(path, "rb");
+    for(int i = 0; i<16 ; i++) {
+        header.fileType[i] = READ(char, file);
     }
-    write_map(path, *map, *color);
-    free(map);
-    free(color);
+
+    if(strncmp(header.fileType, "Voxel Animation", 5))
+        return;
+
+    header.unknown = READ(uint32_t, file);
+    header.numSections = READ(uint32_t, file);
+    header.numSections2 = READ(uint32_t, file);
+    header.bodySize = READ(uint32_t, file);
+    header.startPaletteRemap = READ(uint8_t, file);
+    header.endPaletteRemap = READ(uint8_t, file);
+    
+    for(int x = 0 ; x < 256 ; x++) {
+        for(int y = 0 ; y < 3 ; y++) {            
+            header.palette[x][y] = READ(uint8_t, file);
+        }
+    }
+
+    voxelSection_t sections[header.numSections];
+    for(int i = 0 ; i < header.numSections ; i++ ) {
+        sectionHeader_t header;
+        for(int i = 0; i<16 ; i++) {
+            header.name[i] = READ(char, file);
+        }
+        header.number = READ(uint32_t, file);
+        header.unknown = READ(uint32_t, file);
+        header.unknown2 = READ(uint32_t, file);
+        sections[i].header = header;
+    }
+    //Skip to tailer
+    fseek(file, 802 + 28 * header.numSections + header.bodySize, 0);   
+
+    for(int i = 0 ; i < header.numSections ; i++) { 
+        sectionTailer_t tailer;
+        tailer.spanStartOffset = READ(uint32_t, file);
+        tailer.spanEndOffset = READ(uint32_t, file);
+        tailer.spanDataOffset = READ(uint32_t, file);
+        tailer.scale = READ(float, file);
+        for(int x = 0 ; x < 3 ; x++) {
+            for(int y = 0 ; y < 4 ; y++) {
+                tailer.transform[x][y] = READ(float, file);
+            }        
+        }
+
+        for(int di = 0 ; di < 3 ; di++)
+            tailer.minBounds[di] = READ(float, file);
+
+        for(int di = 0 ; di < 3 ; di++)
+            tailer.maxBounds[di] = READ(float, file);
+
+        tailer.xSize = READ(uint8_t, file);
+        tailer.ySize = READ(uint8_t, file);
+        tailer.zSize = READ(uint8_t, file);
+        tailer.normalType = READ(uint8_t, file);
+        sections[i].tailer = tailer;
+    }
+    mesh_iterator_t iter = {0};    
+    int pos[3];     
+    uint8_t colour[4];       
+    colour[3] = 255;
+	for (int i = 0; i < header.numSections; i++) {
+        sectionData_t data;
+		fseek(file, 802 + 28 * header.numSections + sections[i].tailer.spanStartOffset, 0);
+        long n = sections[i].tailer.xSize * sections[i].tailer.ySize;
+        LOG_D("%d ", n);
+		data.spanStart = (int32_t*) malloc (n*sizeof(int32_t));
+		data.spanEnd = (int32_t*) malloc (n*sizeof(int32_t));
+
+        for (int di = 0 ; di < n ; di++)
+            data.spanStart[di] = READ(int32_t, file);
+
+        for (int di = 0 ; di < n ; di++)
+            data.spanEnd[di] = READ(int32_t, file);
+
+        long dataStart = ftell(file);
+
+		for (int di = 0; di < n; di++)
+		{
+			// Empty column
+			if (data.spanStart[di] == -1)
+				continue;
+            
+			fseek(file, dataStart + data.spanStart[di], 0);
+			int x = (short)(di % sections[i].tailer.xSize);
+			int y = (short)(di / sections[i].tailer.xSize);
+			int z = 0;
+			do
+			{
+				z += READ(uint8_t, file);
+				uint8_t count = READ(uint8_t, file);
+				for (int j = 0; j < count; j++)
+				{
+					uint8_t vColour = READ(uint8_t, file);
+                    //TODO: do something with this					
+                    //uint8_t vNormal = READ(uint8_t, file);
+                    pos[0] = x;
+                    pos[1] = y;
+                    pos[2] = z;
+                    uint8_t *pal = header.palette[vColour];
+                    colour[0] = pal[0];
+                    colour[1] = pal[1];
+                    colour[2] = pal[2];
+    				z++;
+                    mesh_set_at(goxel.image->active_layer->mesh, &iter, pos, colour);
+				}
+
+				READ(uint8_t, file);
+			} while (z < sections[i].tailer.zSize);
+        }
+    }
+}
+
+static void export_as_vxl(const char *path) {
+    
+    
 }
 
 ACTION_REGISTER(import_vxl,
-    .help = "Import a Ace of Spades map file",
+    .help = "Import a Westwood voxel file",
     .cfunc = vxl_import,
     .csig = "vp",
     .file_format = {
@@ -281,7 +210,7 @@ ACTION_REGISTER(import_vxl,
 )
 
 ACTION_REGISTER(export_as_vxl,
-    .help = "Export the image as a Spades map file",
+    .help = "Export the image as a Westwood voxel file",
     .cfunc = export_as_vxl,
     .csig = "vp",
     .file_format = {
