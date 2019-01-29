@@ -177,6 +177,8 @@ static void vxl_import(const char *path) {
 					uint8_t vColour = READ(uint8_t, file);
                     //TODO: do something with this					
                     //uint8_t vNormal = READ(uint8_t, file);
+                    //dump normals for now
+                    READ(uint8_t, file);
                     pos[0] = x;
                     pos[1] = y;
                     pos[2] = z;
