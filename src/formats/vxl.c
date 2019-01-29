@@ -44,10 +44,6 @@ typedef struct {
 } voxelSpanSegment_t;
 
 typedef struct {
-        // NOTE: n = SectionTailer.xSize * SectionTailer.ySize
-
-        // Offset into spanData to the start of each span
-        // NOTE: if == -1 then the span is empty (and has no span data)
         int32_t *spanStart;
         int32_t *spanEnd; 
         voxelSpanSegment_t sections[];
@@ -138,6 +134,7 @@ static void vxl_import(const char *path) {
         tailer.normalType = READ(uint8_t, file);
         sections[i].tailer = tailer;
     }
+
     mesh_iterator_t iter = {0};    
     int pos[3];     
     uint8_t colour[4];       
@@ -160,7 +157,6 @@ static void vxl_import(const char *path) {
 
 		for (int di = 0; di < n; di++)
 		{
-			// Empty column
 			if (data.spanStart[di] == -1)
 				continue;
             
@@ -193,7 +189,10 @@ static void vxl_import(const char *path) {
 				READ(uint8_t, file);
 			} while (z < sections[i].tailer.zSize);
         }
+		free(data.spanStart);
+        free(data.spanEnd);
     }
+    
 }
 
 static void export_as_vxl(const char *path) {
