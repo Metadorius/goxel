@@ -87,6 +87,9 @@ static void vxl_import(const char *path) {
 
     if(strncmp(header.fileType, "Voxel Animation", 5))
         return;
+    
+    mat4_copy(mat4_zero, goxel.image->box);
+    goxel.snap_mask |= SNAP_PLANE;
 
     header.unknown = READ(uint32_t, file);
     header.numSections = READ(uint32_t, file);
@@ -143,8 +146,10 @@ static void vxl_import(const char *path) {
     int pos[3];     
     uint8_t colour[4];       
     colour[3] = 255;
-    //TODO: put each section in own layer
     for (int i = 0; i < header.numSections; i++) {
+        layer_t *layer = image_add_layer(goxel.image);
+        for(int u = 0 ; u < 16 ; u++)
+            layer->name[u] = sections[i].header.name[u];
         sectionData_t data;
         fseek(file, 802 + 28 * header.numSections + sections[i].tailer.spanStartOffset, 0);
         long n = sections[i].tailer.xSize * sections[i].tailer.ySize;
@@ -184,9 +189,7 @@ static void vxl_import(const char *path) {
                     pos[1] = y;
                     pos[2] = z;
                     uint8_t *pal = header.palette[vColour];
-                    colour[0] = pal[0];
-                    colour[1] = pal[1];
-                    colour[2] = pal[2];
+                    vec3_set(colour, pal[0], pal[1], pal[2]);
                     z++;
                     mesh_set_at(goxel.image->active_layer->mesh, &iter, pos, colour);
                 }
@@ -194,9 +197,20 @@ static void vxl_import(const char *path) {
                 READ(uint8_t, file);
             } while (z < sections[i].tailer.zSize);
         }
+        int x, y, z = 0;
+        int w, h, d;
+        float p[3];
+        w = sections[i].tailer.xSize;
+        h = sections[i].tailer.ySize;
+        d = sections[i].tailer.zSize;
+        
+        vec3_set(p, x + w / 2., y + h / 2., z + d / 2.);
+        bbox_from_extents(layer->box, p, w / 2., h / 2., d / 2.);
+        
         free(data.spanStart);
         free(data.spanEnd);
     }   
+    image_delete_layer(goxel.image, &goxel.image->layers[0]);
 }
 
 static void export_as_vxl(const char *path) {

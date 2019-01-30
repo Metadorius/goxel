@@ -56,6 +56,20 @@ static int parse_gpl(const char *data, char *name, int *columns,
     return nb;
 }
 
+#define READ(type, file) \
+    ({ type v; size_t r = fread(&v, sizeof(v), 1, file); (void)r; v;})
+static int parse_pal(const char *path)
+{
+    uint8_t palette[256][3];
+    
+    FILE *file;
+    file = fopen(path, "rb");
+    
+    for(int i = 0 ; i<255 ; i++)
+        for(int j = 0 ; j<3 ; j++)
+            palette[i][j] = READ(uint8_t, file);
+    return 0;
+}
 
 static int on_palette(int i, const char *path, void *user)
 {
@@ -64,6 +78,17 @@ static int on_palette(int i, const char *path, void *user)
     palette_t *pal;
     pal = calloc(1, sizeof(*pal));
     data = assets_get(path, NULL);
+    
+    char extension[3];
+    extension[2] = path[strlen(path)-1];
+    extension[1] = path[strlen(path)-2];
+    extension[0] = path[strlen(path)-3];
+    LOG_D(path);
+    if(extension[1]=='a') {
+        LOG_D("works");
+        parse_pal(path);
+    }
+
     pal->size = parse_gpl(data, pal->name, &pal->columns, NULL);
     pal->entries = calloc(pal->size, sizeof(*pal->entries));
     parse_gpl(data, NULL, NULL, pal->entries);
