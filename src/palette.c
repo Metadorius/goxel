@@ -58,17 +58,16 @@ static int parse_gpl(const char *data, char *name, int *columns,
 
 #define READ(type, file) \
     ({ type v; size_t r = fread(&v, sizeof(v), 1, file); (void)r; v;})
-static int parse_pal(const char *path)
+static void parse_pal(const char *path, palette_entry_t *entries)
 {
-    uint8_t palette[256][3];
-    
     FILE *file;
     file = fopen(path, "rb");
     
-    for(int i = 0 ; i<255 ; i++)
-        for(int j = 0 ; j<3 ; j++)
-            palette[i][j] = READ(uint8_t, file);
-    return 0;
+    for(int i = 0 ; i<255 ; i++) {
+        for(int j = 0 ; j<2 ; j++)
+            entries[i].color[j] = READ(uint8_t, file) << 2;
+        entries[i].color[3] = 255;
+    }
 }
 
 static int on_palette(int i, const char *path, void *user)
@@ -78,17 +77,6 @@ static int on_palette(int i, const char *path, void *user)
     palette_t *pal;
     pal = calloc(1, sizeof(*pal));
     data = assets_get(path, NULL);
-    
-    char extension[3];
-    extension[2] = path[strlen(path)-1];
-    extension[1] = path[strlen(path)-2];
-    extension[0] = path[strlen(path)-3];
-    LOG_D(path);
-    if(extension[1]=='a') {
-        LOG_D("works");
-        parse_pal(path);
-    }
-
     pal->size = parse_gpl(data, pal->name, &pal->columns, NULL);
     pal->entries = calloc(pal->size, sizeof(*pal->entries));
     parse_gpl(data, NULL, NULL, pal->entries);
@@ -103,13 +91,21 @@ static int on_palette2(const char *dir, const char *name, void *user)
     palette_t *pal;
     asprintf(&path, "%s/%s", dir, name);
     pal = calloc(1, sizeof(*pal));
-    data = read_file(path, NULL);
-    pal->size = parse_gpl(data, pal->name, &pal->columns, NULL);
-    pal->entries = calloc(pal->size, sizeof(*pal->entries));
-    parse_gpl(data, NULL, NULL, pal->entries);
+    if(path[strlen(path) - 2] == 'a') {
+        pal->size = 255;
+        pal->entries = calloc(pal->size, sizeof(*pal->entries));
+        for (int i = 0 ; i < strlen(basename(path)) ; i++)
+            pal->name[i] = basename(path)[i];
+        parse_pal(path, pal->entries);
+    } else if (path[strlen(path) - 2] == 'p') {
+        data = read_file(path, NULL);
+        pal->size = parse_gpl(data, pal->name, &pal->columns, NULL);
+        pal->entries = calloc(pal->size, sizeof(*pal->entries));
+        parse_gpl(data, NULL, NULL, pal->entries);
+        free(data);
+    }
     DL_APPEND(*list, pal);
     free(path);
-    free(data);
     return 0;
 }
 
@@ -117,6 +113,12 @@ static int on_palette2(const char *dir, const char *name, void *user)
 void palette_load_all(palette_t **list)
 {
     char *dir;
+    FILE *file;
+    if ((file = fopen("data/palettes/", "r")))
+    {
+        fclose(file);
+	    sys_list_dir("data/palettes/", on_palette2, list);
+    }
     assets_list("data/palettes/", list, on_palette);
     if (sys_get_user_dir()) {
         asprintf(&dir, "%s/palettes", sys_get_user_dir());

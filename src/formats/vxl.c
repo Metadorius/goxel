@@ -43,9 +43,15 @@ typedef struct {
         uint32_t unknown2;
 } sectionHeader_t;
 
+//used for writing
 typedef struct {
-        uint8_t skip;
-        uint8_t numVoxels; 
+    uint8_t colour;
+    uint8_t normal;
+} voxel_t
+
+typedef struct {
+    uint8_t skip;
+    uint8_t numVoxels;
 } voxelSpanSegment_t;
 
 typedef struct {
@@ -217,8 +223,47 @@ static void export_as_vxl(const char *path) {
     path = path ?: noc_file_dialog_open(NOC_FILE_DIALOG_SAVE,
                     "Westwood vxl\0*.vxl\0", NULL, "untitled.vxl");
     if (!path) return;
-    LOG_I("NYI");
-    //TODO: Write me
+    FILE *file;
+    file = fopen(path, "wb");
+    
+    char *fileType = "Voxel Animation";
+    for(int i = 0 ; i<strlen(fileType) ; i++)
+        WRITE(char, fileType[i], file);
+    WRITE(uint8_t, 0, file);
+    WRITE(uint32_t, 1, file);
+    uint32_t numSections = 0;
+    layer_t *layer;
+    DL_FOREACH(goxel.image->layers, layer) {
+        numSections++;
+    }
+    LOG_D("%d ", numSections);
+    WRITE(uint32_t, numSections, file);
+    WRITE(uint32_t, numSections, file);
+    
+    //Jump to section headers
+    fseek(file, 802, 0);   
+    uint32_t number; 
+    DL_FOREACH(goxel.image->layers, layer) {
+        char *name = layer->name;
+        for(int i = 0 ; i<strlen(name) ; i++)
+            WRITE(char, name[i], file);
+        for (int i = 0 ; i<16-strlen(name) ; i++)
+            WRITE(char, 0, file);
+        WRITE(uint32_t, number++, file);
+        WRITE(uint32_t, 1, file);
+        WRITE(uint32_t, 0, file);
+    }
+    
+    uint32_t dataStart = ftell(file);
+    uint32_t bodySize;
+    DL_FOREACH(goxel.image->layers, layer) {
+        w = layer->box[0][0] * 2;
+        h = layer->box[1][1] * 2;
+        d = layer->box[2][2] * 2;
+        int32_t spanStart[w*h];
+        int32_t spanEnd[w*h];
+    }
+    fclose(file);
 }
 
 ACTION_REGISTER(import_vxl,
